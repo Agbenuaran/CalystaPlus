@@ -1700,7 +1700,7 @@ function openCustomerProfile(phone,name){
   if(!all.length){showToast('No history found');return;}
   const first=all[0];
   const delivered=all.filter(a=>a.status==='Delivered').length;
-  const totalSpend=all.filter(a=>['Confirmed','Delivered'].includes(a.status)).reduce((s,a)=>s+(parseFloat(String(a.price||'0').replace(/[₦,\s]/g,''))||0),0);
+  const totalSpend=all.filter(a=>['Confirmed','Delivered'].includes(a.status)).reduce((s,a)=>s+getOrderPrice(a),0);
   const isAdmin=['admin','super_admin'].includes(S.user?.role);
   openModal(`
     <div class="flex items-center gap-3 mb-1">
@@ -2183,7 +2183,7 @@ function renderOrders(){
   // ── Today's Order Worth KPIs
   const today=new Date().toISOString().split('T')[0];
   const todayAll=S.activities.filter(a=>a.created_at?.startsWith(today)&&(isAdmin||a.user_id===u.username));
-  const todayWorth=todayAll.filter(a=>['Confirmed','Delivered'].includes(a.status)).reduce((s,a)=>s+(parseFloat(String(a.price||'0').replace(/[₦,\s]/g,''))||0),0);
+  const todayWorth=todayAll.filter(a=>['Confirmed','Delivered'].includes(a.status)).reduce((s,a)=>s+getOrderPrice(a),0);
   const todayConf=todayAll.filter(a=>a.status==='Confirmed').length;
   const todayDel=todayAll.filter(a=>a.status==='Delivered').length;
   const wEl=document.getElementById('orders-today-worth');if(wEl)wEl.textContent=formatNaira(Math.round(todayWorth));
@@ -2329,12 +2329,24 @@ function parsePrice(val){
   if(!val)return 0;
   return parseFloat(String(val).replace(/[₦,\s]/g,''))||0;
 }
+// Resolves the price to use for revenue KPIs: prefers the price manually
+// entered on the order itself (e.g. via Confirm Order), and falls back to
+// the product's catalog price when no order-specific price was set — so
+// orders confirmed directly from New Log (which never prompts for a price)
+// still count toward revenue instead of silently showing ₦0.
+function getOrderPrice(a){
+  const own=parsePrice(a.price);
+  if(own)return own;
+  const base=(a.product||'').replace(/\s*\(.*?\)\s*/g,'').trim();
+  const prod=S.products.find(p=>p.name===base);
+  return prod?(parseFloat(prod.price||0)||0):0;
+}
 
 function renderFinance(){
   const acts=getFinanceActivities();
   let totalRev=0, totalComm=0;
   acts.forEach(a=>{
-    const p=parsePrice(a.price);
+    const p=getOrderPrice(a);
     totalRev+=p;
     // Commission: look up from S.commissions or calculate
     const comm=S.commissions.filter(c=>c.activity_id===a.id);
@@ -2369,7 +2381,7 @@ function renderFinanceRevenue(el, acts){
   acts.forEach(a=>{
     const key=a.product||'Unknown';
     if(!byProduct[key])byProduct[key]={revenue:0,count:0};
-    byProduct[key].revenue+=parsePrice(a.price);
+    byProduct[key].revenue+=getOrderPrice(a);
     byProduct[key].count++;
   });
   const sorted=Object.entries(byProduct).sort((a,b)=>b[1].revenue-a[1].revenue);
@@ -2380,7 +2392,7 @@ function renderFinanceRevenue(el, acts){
   acts.forEach(a=>{
     const key=a.user_name||a.user_id||'Unknown';
     if(!byCloser[key])byCloser[key]={revenue:0,count:0};
-    byCloser[key].revenue+=parsePrice(a.price);
+    byCloser[key].revenue+=getOrderPrice(a);
     byCloser[key].count++;
   });
   const closerSorted=Object.entries(byCloser).sort((a,b)=>b[1].revenue-a[1].revenue);
@@ -2433,13 +2445,13 @@ function renderFinanceCommissions(el, acts){
       const prod=S.products.find(p=>p.name===(a.product||'').replace(/\s*\(.*?\)\s*/g,'').trim());
       if(prod&&prod.commission_value){
         const cv=parseFloat(prod.commission_value)||0;
-        const price=parsePrice(a.price);
+        const price=getOrderPrice(a);
         commAmt=prod.commission_type==='fixed'?cv:(price*cv/100);
       }
     }
     byCloser[key].earned+=commAmt;
     byCloser[key].orders++;
-    byCloser[key].entries.push({customer:a.customer_name,product:a.product,price:parsePrice(a.price),commission:commAmt,date:a.created_at,status:a.status});
+    byCloser[key].entries.push({customer:a.customer_name,product:a.product,price:getOrderPrice(a),commission:commAmt,date:a.created_at,status:a.status});
   });
 
   const sorted=Object.values(byCloser).sort((a,b)=>b.earned-a.earned);
@@ -2495,7 +2507,7 @@ function renderFinanceOrderLedger(el, acts){
       </div>
       <div class="divide-y divide-slate-50 dark:divide-slate-800/60 max-h-96 overflow-y-auto">
         ${sorted.length?sorted.map(a=>{
-          const price=parsePrice(a.price);
+          const price=getOrderPrice(a);
           const dt=new Date(a.created_at).toLocaleDateString('en-NG',{month:'short',day:'numeric',year:'2-digit'});
           const isDelivered=a.status==='Delivered';
           return`<div class="px-4 py-3">
@@ -2524,7 +2536,7 @@ function exportFinanceCSV(){
   const canSeePhone=PERM.can('view_phone_numbers');
   const h=['Date','Customer',canSeePhone?'Phone':'','Product','Package','Price','Status','Closer','State','Commission'];
   const rows=acts.map(a=>{
-    const price=parsePrice(a.price);
+    const price=getOrderPrice(a);
     const comm=S.commissions.filter(c=>c.activity_id===a.id).reduce((s,c)=>s+parseFloat(c.amount||0),0);
     return[
       new Date(a.created_at).toLocaleDateString('en-GB'),
@@ -2553,12 +2565,12 @@ function renderFinance(){
   const acts=getFinanceActivities();
   let totalRev=0,totalComm=0;
   acts.forEach(a=>{
-    totalRev+=parsePrice(a.price);
+    totalRev+=getOrderPrice(a);
     const comm=S.commissions.filter(c=>c.activity_id===a.id);
     if(comm.length)totalComm+=comm.reduce((s,c)=>s+parseFloat(c.amount||0),0);
     else{
       const prod=S.products.find(p=>p.name===(a.product||'').replace(/\s*\(.*?\)\s*/g,'').trim());
-      if(prod&&prod.commission_value){const cv=parseFloat(prod.commission_value)||0;const price=parsePrice(a.price);totalComm+=prod.commission_type==='fixed'?cv:(price*cv/100);}
+      if(prod&&prod.commission_value){const cv=parseFloat(prod.commission_value)||0;const price=getOrderPrice(a);totalComm+=prod.commission_type==='fixed'?cv:(price*cv/100);}
     }
   });
   const avg=acts.length?totalRev/acts.length:0;
@@ -2610,7 +2622,7 @@ function renderProductAnalytics(){
   acts.forEach(a=>{
     const k=a.product||'Unknown';
     if(!stats[k])stats[k]={key:k,label:k,revenue:0,orders:0,delivered:0,confirmed:0,pending:0,packages:{}};
-    const price=parseFloat(String(a.price||'0').replace(/[₦,\s]/g,''))||0;
+    const price=getOrderPrice(a);
     stats[k].revenue+=price;
     stats[k].orders++;
     if(a.status==='Delivered')stats[k].delivered++;
@@ -2778,7 +2790,7 @@ async function renderAgentPerformance(){
       const agStock=stockMap[agent.id]||{};
       const totalStockHeld=Object.values(agStock).reduce((s,v)=>s+(v||0),0);
       const deliveryRate=totalTransferred>0?Math.min(100,Math.round((deliveryCount/totalTransferred)*100)):0;
-      const revenue=deliveries.reduce((s,a)=>s+(parseFloat(String(a.price||'0').replace(/[₦,\s]/g,''))||0),0);
+      const revenue=deliveries.reduce((s,a)=>s+getOrderPrice(a),0);
 
       return`<div class="glass-surface rounded-2xl p-4">
         <!-- Header -->
@@ -2835,7 +2847,7 @@ async function renderAgentPerformance(){
           <p class="text-[9px] text-slate-400 uppercase tracking-wider font-bold mb-1.5">Recent Deliveries</p>
           ${deliveries.slice(0,3).map(a=>`<div class="flex items-center justify-between py-1">
             <p class="text-[10px] text-slate-600 dark:text-slate-300 truncate">${escHtml(a.customer_name)} · ${escHtml(a.product||'')}</p>
-            <p class="text-[10px] font-bold text-emerald-600 ml-2 flex-shrink-0">${formatNaira(parseFloat(String(a.price||'0').replace(/[₦,\s]/g,''))||0)}</p>
+            <p class="text-[10px] font-bold text-emerald-600 ml-2 flex-shrink-0">${formatNaira(getOrderPrice(a))}</p>
           </div>`).join('')}
         </div>`:''}
       </div>`;

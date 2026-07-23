@@ -1223,6 +1223,10 @@ body::after{
               <div class="flex items-center gap-3"><span class="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400"><i data-lucide="git-branch" class="w-4 h-4"></i></span><span class="text-xs font-bold text-slate-700 dark:text-slate-200">Lead Assignment Rules</span></div>
               <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
             </button>
+            <button onclick="openAssignmentModeSettings()" class="w-full px-4 py-3.5 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+              <div class="flex items-center gap-3"><span class="p-2 rounded-xl bg-cyan-50 dark:bg-cyan-950/40 text-cyan-600 dark:text-cyan-400"><i data-lucide="shuffle" class="w-4 h-4"></i></span><span class="text-xs font-bold text-slate-700 dark:text-slate-200">Assignment Mode</span></div>
+              <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
+            </button>
             <button onclick="openRoleEngine()" class="w-full px-4 py-3.5 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
               <div class="flex items-center gap-3"><span class="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400"><i data-lucide="shield" class="w-4 h-4"></i></span><span class="text-xs font-bold text-slate-700 dark:text-slate-200">Roles &amp; Permissions</span></div>
               <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
@@ -1849,7 +1853,7 @@ function buildLeadNotes(data){
   return lines.filter(Boolean).join('\n');
 }
 async function hashPassword(p){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(SALT+p));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('');}
-let S={user:null,activities:[],users:[],products:[],notifications:[],commissions:[],leads:[],assignmentRules:[],leadFilter:'all',orderFilter:'all',dashPeriod:'today',reportPeriod:'today',lbPeriod:'today',reportSubtab:'product',fuTab:'overdue',eaplMode:'single',toastT:null,realtimeWS:null,rtReconnectTimer:null,_rtHeartbeat:null,searchDebounceTimer:null,loginAttempts:0,loginLockUntil:0,stock:{},orderSelectMode:false,selectedOrderIds:[]};
+let S={user:null,activities:[],users:[],products:[],notifications:[],commissions:[],leads:[],assignmentRules:[],assignmentSettings:{mode:'state_rules',state_rules_enabled:true,rr_last_assigned:null},leadFilter:'all',orderFilter:'all',dashPeriod:'today',reportPeriod:'today',lbPeriod:'today',reportSubtab:'product',fuTab:'overdue',eaplMode:'single',toastT:null,realtimeWS:null,rtReconnectTimer:null,_rtHeartbeat:null,searchDebounceTimer:null,loginAttempts:0,loginLockUntil:0,stock:{},orderSelectMode:false,selectedOrderIds:[]};
 function getCounts(a){return{logs:a.length,confirmed:a.filter(x=>x.status==='Confirmed').length,delivered:a.filter(x=>x.status==='Delivered').length,pending:a.filter(x=>x.status==='Pending').length,rescheduled:a.filter(x=>x.status==='Rescheduled').length,nurture:a.filter(x=>x.status==='Nurture').length};}
 function filterByPeriod(acts,p){const n=new Date(),td=new Date(n.getFullYear(),n.getMonth(),n.getDate()),wk=new Date(td);wk.setDate(td.getDate()-td.getDay());const mo=new Date(n.getFullYear(),n.getMonth(),1);return acts.filter(a=>{const d=new Date(a.created_at);if(p==='today')return d>=td;if(p==='week')return d>=wk;if(p==='month')return d>=mo;return true;});}
 
@@ -1960,7 +1964,7 @@ function startRealtime(){
   try{
     const ws=new WebSocket(SB_URL.replace('https','wss')+'/realtime/v1/websocket?apikey='+SB_KEY+'&vsn=1.0.0');S.realtimeWS=ws;
     ws.onopen=()=>{_rtC=false;document.getElementById('realtime-indicator').classList.remove('hidden');
-      ['realtime:public:activities','realtime:public:notifications','realtime:public:commissions','realtime:public:leads','realtime:public:lead_assignment_rules'].forEach(t=>ws.send(JSON.stringify({topic:t,event:'phx_join',payload:{},ref:'1'})));
+      ['realtime:public:activities','realtime:public:notifications','realtime:public:commissions','realtime:public:leads','realtime:public:lead_assignment_rules','realtime:public:lead_assignment_settings'].forEach(t=>ws.send(JSON.stringify({topic:t,event:'phx_join',payload:{},ref:'1'})));
       clearInterval(S._rtHeartbeat);S._rtHeartbeat=setInterval(()=>{if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({topic:'phoenix',event:'heartbeat',payload:{},ref:'hb'}));},25000);};
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(['INSERT','UPDATE','DELETE'].includes(m.event))handleRT(m);}catch(e){}};
     ws.onclose=()=>{_rtC=false;document.getElementById('realtime-indicator').classList.add('hidden');clearInterval(S._rtHeartbeat);S.rtReconnectTimer=setTimeout(()=>{if(S.user)startRealtime();},5000);};
@@ -1981,6 +1985,11 @@ function handleRT(msg){
     }
   }
   if(topic.includes('commissions')&&rec.user_id===u.username){if(!S.commissions.find(c=>c.id===rec.id))S.commissions.unshift(rec);}
+  if(topic.includes('lead_assignment_settings')&&(msg.event==='UPDATE'||msg.event==='INSERT')){
+    S.assignmentSettings={mode:rec.mode||'state_rules',state_rules_enabled:rec.state_rules_enabled!==false,rr_last_assigned:rec.rr_last_assigned||null};
+    try{localStorage.setItem(ASSIGN_SETTINGS_KEY,JSON.stringify(S.assignmentSettings));}catch(e){}
+    if(document.getElementById('am-mode-options'))openAssignmentModeSettings(); // live-refresh modal if open
+  }
   if(topic.includes('leads')){
     if(msg.event==='INSERT'){
       if(isAdmin||rec.assigned_to===u.username){
@@ -5295,6 +5304,95 @@ function applyAssignmentRule(lead){
   return null;
 }
 
+// ══════════════════════════════════════════════════════
+// ASSIGNMENT MODE ENGINE — State Rules / Round Robin / Manual
+// Settings sync to Supabase table `lead_assignment_settings`
+// (single row, id=1) + a localStorage cache for instant paint
+// and offline resilience, mirroring the CATALOG pattern above.
+// ══════════════════════════════════════════════════════
+const ASSIGN_SETTINGS_KEY='calysta_assignment_settings_v1';
+
+async function loadAssignmentSettings(){
+  // 1. Local cache first for instant paint
+  try{
+    const cached=localStorage.getItem(ASSIGN_SETTINGS_KEY);
+    if(cached)Object.assign(S.assignmentSettings,JSON.parse(cached));
+  }catch(e){}
+  // 2. Authoritative copy from Supabase
+  try{
+    const rows=await SB.get('lead_assignment_settings','id=eq.1');
+    if(rows&&rows.length){
+      S.assignmentSettings={mode:rows[0].mode||'state_rules',state_rules_enabled:rows[0].state_rules_enabled!==false,rr_last_assigned:rows[0].rr_last_assigned||null};
+      try{localStorage.setItem(ASSIGN_SETTINGS_KEY,JSON.stringify(S.assignmentSettings));}catch(e){}
+    }
+  }catch(e){
+    // Offline or table missing — silently keep whatever we loaded from cache/defaults
+  }
+}
+
+async function saveAssignmentSettings(){
+  try{localStorage.setItem(ASSIGN_SETTINGS_KEY,JSON.stringify(S.assignmentSettings));}catch(e){}
+  const payload={mode:S.assignmentSettings.mode,state_rules_enabled:S.assignmentSettings.state_rules_enabled,rr_last_assigned:S.assignmentSettings.rr_last_assigned,updated_at:new Date().toISOString()};
+  try{
+    const r=await SB.patch('lead_assignment_settings','id=eq.1',payload);
+    if(!r||!r.length)await SB.post('lead_assignment_settings',{id:1,...payload}); // first-time row creation
+  }catch(e){
+    showToast('⚠️ Assignment settings saved locally — will sync when online');
+  }
+}
+
+// Eligible Round Robin pool: closers only, skips inactive/suspended users.
+// Sorted by username for a stable, deterministic rotation order.
+function getEligibleRoundRobinClosers(){
+  return S.users.filter(u=>u.role==='closer'&&u.active!==false).sort((a,b)=>(a.username||'').localeCompare(b.username||''));
+}
+
+// Advances and persists the rotation pointer. Storing the *last assigned
+// username* (not an index) means the rotation self-heals correctly even if
+// closers are added/removed/deactivated between assignments or after a
+// server restart — we just look up where that username sits in the current
+// eligible pool and move to the next slot.
+async function getNextRoundRobinCloser(){
+  const pool=getEligibleRoundRobinClosers();
+  if(!pool.length)return null;
+  const lastUsername=S.assignmentSettings.rr_last_assigned;
+  let nextIdx=0;
+  if(lastUsername){
+    const lastIdx=pool.findIndex(u=>u.username===lastUsername);
+    nextIdx=lastIdx===-1?0:(lastIdx+1)%pool.length;
+  }
+  const next=pool[nextIdx];
+  S.assignmentSettings.rr_last_assigned=next.username;
+  await saveAssignmentSettings();
+  return next;
+}
+
+// ── Central Lead Assignment Resolver ──────────────────────
+// Single source of truth for how a brand-new lead should be routed.
+// Every lead-creation path (manual add, webhook intake, bulk seed) should
+// call this instead of applyAssignmentRule() directly, so the Settings →
+// Assignment Mode selection is always respected.
+// Returns {username,name,method} on success, or null — a null result means
+// the lead stays in the Unassigned Lead Queue for manual assignment.
+async function resolveLeadAssignment(lead){
+  const mode=S.assignmentSettings.mode||'state_rules';
+  if(mode==='state_rules'){
+    if(!S.assignmentSettings.state_rules_enabled)return null; // disabled — rules stay configured, just ignored
+    const username=applyAssignmentRule(lead);
+    if(!username)return null;
+    const user=S.users.find(u=>u.username===username);
+    return{username,name:user?.name||username,method:'state_rule'};
+  }
+  if(mode==='round_robin'){
+    const user=await getNextRoundRobinCloser();
+    if(!user)return null; // no eligible closers — falls to Unassigned Queue
+    return{username:user.username,name:user.name,method:'round_robin'};
+  }
+  // 'manual' mode (or anything unrecognized) — every new lead waits for an
+  // Admin/Super Admin to assign it by hand.
+  return null;
+}
+
 // ── Load Leads
 async function loadLeads(){
   try{
@@ -5859,6 +5957,7 @@ async function assignLeadToUser(leadId,username){
     await SB.patch('leads','id=eq.'+leadId,{assigned_to:username,assigned_name:user?.name||username,lead_status:'Assigned'});
     // Notify the assigned user
     await SB.post('notifications',{user_id:username,type:'lead_assigned',lead_id:leadId,title:'🎯 New Lead Assigned',message:`${S.leads[idx].customer_name||'Lead'} — ${S.leads[idx].product||''} (${S.leads[idx].state||'Unknown state'})`,read:false}).catch(()=>{});
+    auditLog('lead_assigned',`${S.leads[idx].customer_name||'Lead'} → ${user?.name||username} (Manual) · Lead #${leadId}`);
   }catch(e){showToast('⚠️ Sync failed');}
 }
 
@@ -5905,15 +6004,18 @@ async function saveManualLead(){
   const rawState=document.getElementById('ml-state')?.value.trim()||'';
   const stateResult=detectNigerianState(rawState);
   const product=document.getElementById('ml-product')?.value||'';
-  const assignedTo=applyAssignmentRule({product,state:stateResult.state});
-  const lead={customer_name:name,phone,address:document.getElementById('ml-address')?.value.trim()||'',state:stateResult.state||rawState,state_confidence:stateResult.confidence,product,notes:document.getElementById('ml-notes')?.value.trim()||'',source:'manual',lead_status:'Pending',assigned_to:assignedTo||null,assigned_name:assignedTo?(S.users.find(u=>u.username===assignedTo)?.name||assignedTo):null,created_by:S.user.username};
+  const routed=await resolveLeadAssignment({product,state:stateResult.state});
+  const lead={customer_name:name,phone,address:document.getElementById('ml-address')?.value.trim()||'',state:stateResult.state||rawState,state_confidence:stateResult.confidence,product,notes:document.getElementById('ml-notes')?.value.trim()||'',source:'manual',lead_status:'Pending',assigned_to:routed?.username||null,assigned_name:routed?.name||null,created_by:S.user.username};
   closeModal();showToast('Saving lead...');
   try{
     const r=await SB.post('leads',lead);
     if(r&&r.length){
       S.leads.unshift(r[0]);updateLeadsBadge();renderLeads();
-      showToast(assignedTo?'✅ Lead assigned to '+(lead.assigned_name||assignedTo):'⚠️ Lead added — no rule matched, check Unassigned');
-      if(assignedTo)await SB.post('notifications',{user_id:assignedTo,type:'lead_assigned',title:'New Lead Assigned',message:`${name} · ${product} · ${stateResult.state||'Unknown'}`,read:false}).catch(()=>{});
+      showToast(routed?'✅ Lead assigned to '+routed.name:'⚠️ Lead added — check Unassigned Queue');
+      if(routed){
+        await SB.post('notifications',{user_id:routed.username,type:'lead_assigned',lead_id:r[0].id,title:'New Lead Assigned',message:`${name} · ${product} · ${stateResult.state||'Unknown'}`,read:false}).catch(()=>{});
+        auditLog('lead_assigned',`${name} → ${routed.name} (${routed.method==='round_robin'?'Round Robin':'State Rule'}) · Lead #${r[0].id}`);
+      }
     }else{showToast('⚠️ Failed to save lead');}
   }catch(e){showToast('⚠️ Error: '+e.message);}
 }
@@ -6621,6 +6723,67 @@ async function deleteAssignmentRule(id){
   try{await SB.del('lead_assignment_rules','id=eq.'+id);S.assignmentRules=S.assignmentRules.filter(r=>r.id!==id);const list=document.getElementById('ar-rules-list');if(list)list.innerHTML=renderAssignmentRulesList();showToast('Rule deleted');}catch(e){showToast('⚠️ Error');}
 }
 
+// ── Assignment Mode Settings Center
+// Lets Admin/Super Admin pick how new leads are routed (State Rules /
+// Round Robin / Manual), and independently pause State Rules without
+// losing any configured rules.
+async function openAssignmentModeSettings(){
+  await loadAssignmentSettings();
+  const mode=S.assignmentSettings.mode||'state_rules';
+  const enabled=S.assignmentSettings.state_rules_enabled!==false;
+  const rrPool=getEligibleRoundRobinClosers();
+  const lastUser=S.assignmentSettings.rr_last_assigned?S.users.find(u=>u.username===S.assignmentSettings.rr_last_assigned):null;
+  const modeOptions=[
+    {key:'state_rules',label:'State Rules',desc:'Route by product + Nigerian state, using the rules you configure.',icon:'🗺️'},
+    {key:'round_robin',label:'Round Robin',desc:'Evenly rotate new leads among active closers, one at a time.',icon:'🔁'},
+    {key:'manual',label:'Manual Assignment',desc:'New leads wait in the Unassigned Queue for an Admin to assign.',icon:'✋'},
+  ];
+  openModal(`<h3 class="text-base font-extrabold font-display">🎯 Assignment Mode</h3>
+    <p class="text-xs text-slate-400 mb-4">Choose how brand-new leads get routed to closers.</p>
+    <div class="space-y-2 mb-4" id="am-mode-options">
+      ${modeOptions.map(o=>`<button onclick="selectAssignmentMode('${o.key}')" class="w-full flex items-start gap-3 p-3 rounded-xl border text-left transition-colors ${mode===o.key?'bg-violet-50 dark:bg-violet-950/30 border-violet-300 dark:border-violet-700':'bg-slate-50 dark:bg-slate-800/40 border-transparent'}">
+        <span class="text-lg leading-none mt-0.5">${o.icon}</span>
+        <span class="flex-1 min-w-0">
+          <span class="block text-xs font-bold text-slate-700 dark:text-slate-200">${o.label}</span>
+          <span class="block text-[10px] text-slate-400 mt-0.5">${o.desc}</span>
+        </span>
+        <span class="w-4 h-4 rounded-full border-2 flex-shrink-0 mt-0.5 ${mode===o.key?'bg-violet-500 border-violet-500':'border-slate-300 dark:border-slate-600'}"></span>
+      </button>`).join('')}
+    </div>
+    <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl mb-2">
+      <div class="min-w-0 pr-3">
+        <p class="text-xs font-bold text-slate-700 dark:text-slate-200">Enable State Assignment Rules</p>
+        <p class="text-[10px] text-slate-400 mt-0.5">Pause rules without deleting them. Only takes effect while mode is State Rules.</p>
+      </div>
+      <button onclick="toggleStateRulesEnabled()" class="w-11 h-6 rounded-full ${enabled?'bg-brand-500':'bg-slate-300 dark:bg-slate-700'} relative transition-colors flex-shrink-0">
+        <span class="absolute ${enabled?'left-6':'left-1'} top-1 w-4 h-4 rounded-full bg-white transition-all"></span>
+      </button>
+    </div>
+    ${mode==='round_robin'?`<div class="p-3 bg-cyan-50 dark:bg-cyan-950/20 rounded-xl text-[11px] text-cyan-700 dark:text-cyan-300 mb-2">
+      <strong>${rrPool.length}</strong> active closer${rrPool.length!==1?'s':''} in rotation${lastUser?` · last assigned: <strong>${escHtml(lastUser.name)}</strong>`:''}
+      ${!rrPool.length?'<br>⚠️ No active closers found — new leads will fall to the Unassigned Queue until a closer is added or reactivated.':''}
+    </div>`:''}
+    <button onclick="closeModal()" class="w-full py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl text-xs font-bold mt-2">Done</button>`);
+}
+
+async function selectAssignmentMode(mode){
+  if(S.assignmentSettings.mode===mode){openAssignmentModeSettings();return;}
+  S.assignmentSettings.mode=mode;
+  await saveAssignmentSettings();
+  const labels={state_rules:'State Rules',round_robin:'Round Robin',manual:'Manual Assignment'};
+  auditLog('assignment_mode_changed',`Assignment mode set to: ${labels[mode]||mode}`);
+  showToast('✅ Assignment mode: '+(labels[mode]||mode));
+  openAssignmentModeSettings();
+}
+
+async function toggleStateRulesEnabled(){
+  S.assignmentSettings.state_rules_enabled=!S.assignmentSettings.state_rules_enabled;
+  await saveAssignmentSettings();
+  auditLog('state_rules_toggled',S.assignmentSettings.state_rules_enabled?'State Assignment Rules enabled':'State Assignment Rules disabled (existing rules preserved)');
+  showToast(S.assignmentSettings.state_rules_enabled?'✅ State Rules enabled':'⏸️ State Rules disabled (rules preserved)');
+  openAssignmentModeSettings();
+}
+
 // ── Webhook ingestion: public endpoint for website forms
 // Forms POST JSON to: /rest/v1/rpc/ingest_lead (Supabase Edge Function)
 // Payload: {name, phone, address, state, product, source, email, message}
@@ -6634,17 +6797,19 @@ async function ingestWebhookLead(formData){
   const product=formData.product||detectProduct(formData.message||formData.notes||'');
   const source=formData.source||formData.form_source||'webhook';
   const notes=`📋 Form Data:\n${JSON.stringify(formData,null,2)}`;
-  const assignedTo=applyAssignmentRule({product,state:stateResult.state});
-  const assignedUser=assignedTo?S.users.find(u=>u.username===assignedTo):null;
-  const lead={customer_name:name||'Form Submission',phone,address,state:stateResult.state||rawState,state_confidence:stateResult.confidence,product,notes,source,lead_status:'Pending',assigned_to:assignedTo||null,assigned_name:assignedUser?.name||assignedTo||null,created_by:'webhook'};
+  const routed=await resolveLeadAssignment({product,state:stateResult.state});
+  const lead={customer_name:name||'Form Submission',phone,address,state:stateResult.state||rawState,state_confidence:stateResult.confidence,product,notes,source,lead_status:'Pending',assigned_to:routed?.username||null,assigned_name:routed?.name||null,created_by:'webhook'};
   try{
     const r=await SB.post('leads',lead);
     if(r&&r.length){
       S.leads.unshift(r[0]);updateLeadsBadge();
       const cs=document.querySelector('.screen.active')?.id;if(cs==='s-leads')renderLeads();
-      if(assignedTo)await SB.post('notifications',{user_id:assignedTo,type:'lead_assigned',lead_id:r[0].id,title:'🎯 New Website Lead',message:`${name} · ${product} · ${stateResult.state||'Unknown'}`,read:false}).catch(()=>{});
+      if(routed){
+        await SB.post('notifications',{user_id:routed.username,type:'lead_assigned',lead_id:r[0].id,title:'🎯 New Website Lead',message:`${name} · ${product} · ${stateResult.state||'Unknown'}`,read:false}).catch(()=>{});
+        auditLog('lead_assigned',`${name||'Form Submission'} → ${routed.name} (${routed.method==='round_robin'?'Round Robin':'State Rule'}) · Lead #${r[0].id}`);
+      }
       showToast('🎯 New lead received: '+(name||'Form Submission'));
-      return{success:true,lead:r[0],assigned_to:assignedTo};
+      return{success:true,lead:r[0],assigned_to:routed?.username||null};
     }
   }catch(e){return{success:false,error:e.message};}
   return{success:false};
@@ -6713,7 +6878,7 @@ async function clearTestLeads(){
 const _origLoadAll=loadAll;
 loadAll=async function(){
   await _origLoadAll();
-  await Promise.all([loadLeads(),loadAssignmentRules()]);
+  await Promise.all([loadLeads(),loadAssignmentRules(),loadAssignmentSettings()]);
   updateLeadsBadge();
 };
 
